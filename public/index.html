@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Simplify</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <nav id="nav" hidden>
+    <button data-view="cover" title="Now playing (1)">
+      <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2.5"/></svg>
+    </button>
+    <button data-view="library" title="Library (2)">
+      <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
+    </button>
+    <button data-view="search" title="Search (3 or /)">
+      <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
+    </button>
+  </nav>
+
+  <main id="setup" class="view message" hidden></main>
+
+  <main id="cover" class="view" hidden>
+    <div id="art-wrap"><img id="art" alt=""><div id="art-empty">Pick something from your library</div></div>
+    <div id="meta">
+      <div id="track"></div>
+      <div id="artist"></div>
+    </div>
+  </main>
+
+  <main id="library" class="view" hidden>
+    <div class="filters" id="filters">
+      <button data-filter="all" class="on">All</button>
+      <button data-filter="album">Albums</button>
+      <button data-filter="playlist">Playlists</button>
+      <button data-filter="show">Podcasts</button>
+      <select id="sort" title="Sort">
+        <option value="added">Recently added</option>
+        <option value="played">Last played</option>
+        <option value="artist">Artist</option>
+        <option value="title">Title</option>
+      </select>
+    </div>
+    <div class="grid" id="library-grid"></div>
+  </main>
+
+  <main id="search" class="view" hidden>
+    <div id="search-bar">
+      <input id="search-input" type="search" placeholder="Search" autocomplete="off" spellcheck="false">
+      <label id="scope" title="Search only what you've saved, or all of Spotify">
+        <input id="scope-toggle" type="checkbox" checked>
+        <span class="switch"></span>
+        <span id="scope-label">My library</span>
+      </label>
+    </div>
+    <div class="grid" id="search-grid"></div>
+  </main>
+
+  <div id="controls" hidden>
+    <div id="now"><div id="now-track"></div><div id="now-sub"></div></div>
+    <div id="transport">
+    <button id="like" class="mode" title="Like"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></button>
+    <button id="shuffle" class="mode" title="Shuffle"><svg viewBox="0 0 24 24"><path d="M3 7h3.5c5 0 6 10 11 10H21M3 17h3.5c1.6 0 2.8-1 3.9-2.4M21 7h-3.5c-1.6 0-2.8 1-3.9 2.4M18.5 4.5L21 7l-2.5 2.5M18.5 14.5L21 17l-2.5 2.5"/></svg></button>
+    <button id="prev" title="Previous (←)"><svg viewBox="0 0 24 24"><path d="M6 5v14M20 5.5v13L9 12z"/></svg></button>
+    <button id="toggle" title="Play/pause (space)">
+      <svg id="icon-play" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"/></svg>
+      <svg id="icon-pause" viewBox="0 0 24 24" hidden><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>
+    </button>
+    <button id="next" title="Next (→)"><svg viewBox="0 0 24 24"><path d="M18 5v14M4 5.5v13L15 12z"/></svg></button>
+    <button id="repeat" class="mode" title="Repeat"><svg viewBox="0 0 24 24"><path d="M17 2l4 4-4 4M3 11V9a3 3 0 013-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 01-3 3H3"/></svg></button>
+    <button id="add" class="mode" title="Add to or remove from a playlist"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+    </div>
+    <div id="progress">
+      <span id="elapsed">0:00</span>
+      <input id="seek" type="range" min="0" max="1" value="0" step="1000" tabindex="-1" disabled>
+      <span id="duration">0:00</span>
+    </div>
+  </div>
+
+  <div id="playlist-menu" hidden></div>
+  <div id="tip" hidden><div id="tip-title"></div><div id="tip-sub"></div></div>
+  <div id="toast" hidden></div>
+
+  <script src="/config.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
