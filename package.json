@@ -5,9 +5,40 @@
   "private": true,
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist:mac": "ELECTRON_OVERRIDE_DIST_PATH=\"$PWD/node_modules/electron/dist\" electron-builder --mac dmg",
+    "dist:linux": "ELECTRON_OVERRIDE_DIST_PATH=\"$PWD/node_modules/electron/dist\" electron-builder --linux AppImage"
   },
   "devDependencies": {
-    "electron": "github:castlabs/electron-releases#v44.5.1+wvcus"
+    "electron": "github:castlabs/electron-releases#v44.5.1+wvcus",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "local.simplify",
+    "productName": "Simplify",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "electronDist": "vendor",
+    "electronVersion": "44.5.1+wvcus",
+    "files": [
+      "main.js",
+      "public/**/*"
+    ],
+    "afterPack": "build/afterPack.js",
+    "mac": {
+      "icon": "assets/simplify.icns",
+      "target": ["dmg"],
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "linux": {
+      "icon": "assets/linux/icon-1024.png",
+      "target": ["AppImage"],
+      "category": "AudioVideo",
+      "executableName": "simplify"
+    }
   }
 }

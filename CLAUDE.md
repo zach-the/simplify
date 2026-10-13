@@ -17,9 +17,17 @@ Premium account and their own Spotify developer app.
 - `run.sh` + `server.py` are the fallback shell: a Python static server plus a
   Google Chrome `--app` window on its own profile. Works on macOS and Linux.
 - `build-mac.sh` builds `~/Applications/Simplify.app` from the Electron runtime
-  in `vendor/` and VMP-signs it if the signing tool is installed.
-- `assets/simplify.icns` is a placeholder app icon.
-- `vendor/` is gitignored: the Electron runtime, its zip, and a Python venv for the signing tool.
+  in `vendor/` and VMP-signs it if the signing tool is installed. This is the
+  dev-loop app: it re-requires `main.js` from this repo, so Cmd+R shows edits
+  without rebuilding. It is not the distributable package (see below).
+- `assets/simplify.icns` is a placeholder app icon; `assets/linux/icon-1024.png`
+  is the same artwork (extracted from the icns) for electron-builder's Linux icon.
+- `build/afterPack.js` is an electron-builder hook: on macOS it VMP-signs the
+  packaged `.app` with castlabs EVS before electron-builder's own (ad-hoc)
+  codesign step runs, same ordering `build-mac.sh` uses by hand. No-op on Linux.
+- `vendor/` is gitignored: the Electron runtime zip(s) (also used by
+  electron-builder, see below), the extracted runtime, and a Python venv for
+  the signing tool.
 
 The port and path are fixed because the Spotify app's registered redirect URI is
 exactly `http://127.0.0.1:8974/callback`. Changing the port means changing it in
@@ -35,6 +43,32 @@ the Spotify dashboard too.
 Each shell has its own browser profile, so each needs its own Spotify sign-in.
 The Electron sign-in lives in `~/Library/Application Support/Simplify` and
 survives rebuilds.
+
+## Packaging a distributable build
+
+`npm run dist:mac` (DMG) and `npm run dist:linux` (AppImage) use electron-builder
+to produce a standalone, installable build — unlike `build-mac.sh`, the app's
+code is frozen into the package (an asar archive), not loaded live from this
+folder. Output lands in `dist/` (gitignored).
+
+Both scripts set `ELECTRON_OVERRIDE_DIST_PATH` to `node_modules/electron/dist`
+and the `build.electronDist`/`build.electronVersion` fields in `package.json`
+point electron-builder at `vendor/` for the castlabs runtime zip, so it never
+tries to download stock Electron. This means `vendor/` must hold the zip named
+exactly as castlabs publishes it (see the recreate instructions below) before
+either script runs; `npm install` alone can't fetch it, since it's a GitHub
+release asset, not an npm-resolvable git dependency in some environments.
+
+- Linux (AppImage): built and runtime-smoke-tested in this repo's dev sandbox —
+  `npm run dist:linux` produces a working AppImage whose Electron process boots
+  and serves `public/` on `127.0.0.1:8974`. Actual window rendering was not
+  checked (no display in that sandbox); confirm a window actually opens and
+  plays audio on real hardware.
+- macOS (DMG): wired up (config + the `afterPack` VMP-sign hook) but **untested**
+  — it can only be built and verified on a Mac. `identity: null` in the `mac`
+  build config ad-hoc-signs the app, matching `build-mac.sh`'s `codesign --sign -`.
+  If `vendor/evs` isn't set up, the hook skips VMP signing and warns, same as
+  `build-mac.sh` without castlabs-evs installed.
 
 ## Current state
 
@@ -72,20 +106,35 @@ That block is deliberate. Do not route around it with mirrors, proxies, or by
 disabling the security client. GitHub is reachable. Options the owner is
 weighing: ask IT, or build on a personal computer.
 
-To recreate `vendor/` on a machine without it:
+To recreate `vendor/` on a machine without it (macOS, arm64 — swap the asset name
+for a different arch/platform, e.g. `linux-x64`):
 
     mkdir -p vendor && cd vendor
-    curl -fL -o electron.zip "https://github.com/castlabs/electron-releases/releases/download/v44.5.1%2Bwvcus/electron-v44.5.1%2Bwvcus-darwin-arm64.zip"
+    curl -fL -o "electron-v44.5.1+wvcus-darwin-arm64.zip" "https://github.com/castlabs/electron-releases/releases/download/v44.5.1%2Bwvcus/electron-v44.5.1%2Bwvcus-darwin-arm64.zip"
     # sha256 9503ac243997f151a3687d4e87d6f15d45127f50726ff2a8fd4c758b966d0dd4
-    mkdir electron && ditto -x -k electron.zip electron
+    mkdir electron && ditto -x -k "electron-v44.5.1+wvcus-darwin-arm64.zip" electron
     python3 -m venv evs
+
+Keep the zip's filename exactly as downloaded (`electron-v<version>-<platform>-<arch>.zip`,
+matching castlabs' release asset name) — `npm run dist:mac`/`dist:linux` look
+for it there by that name. `node_modules/electron` isn't installable via plain
+`npm install` in every environment (it's a git dependency pointing at a GitHub
+release, not a registry package); if that fails, build it by hand instead:
+make `node_modules/electron/dist` a symlink to `vendor/electron`, write
+`node_modules/electron/path.txt` containing the binary's path relative to that
+folder (`electron` on Linux, `Electron.app/Contents/MacOS/Electron` on macOS),
+and give `node_modules/electron` a minimal `package.json` (version
+`44.5.1+wvcus`) and `index.js` that resolves to it — this is exactly what the
+real `electron` npm package does, just pointed at the castlabs build already
+in `vendor/`.
 
 Once Electron plays, delete `run.sh` and `server.py`; the owner wants Electron only.
 
 ## Planned
 
-- Linux: castlabs Electron needs no VMP signing on Linux, so `main.js` should
-  work with the linux build of the same release. `package.json` pins it for `npm install`.
+- Linux: castlabs Electron needs no VMP signing on Linux, so `main.js` already
+  works with the linux build of the same release (see Packaging, above, for the
+  AppImage build — functionally smoke-tested, real display/audio unverified).
 - iOS: discussed, not started. Third-party apps cannot stream on iOS; it would be
   a remote control for the official Spotify app (home-screen web app first).
 
