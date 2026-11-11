@@ -117,3 +117,34 @@ until this is run on an actual Mac.
   package.json `bin` field) because this sandbox's npm can't fetch git-type
   dependencies at all — a real `npm install` on an unrestricted machine
   wouldn't need this.
+
+## Update (2026-11-11, Mac session): installed the zip, patched it in place
+
+The Mac side installed `dist/Simplify-0.1.0-arm64-mac.zip` to
+`~/Applications/Simplify.app` and ran `codesign --force --deep --sign -` on it.
+Codesign verifies. Playback still needs to be tested by the owner. The old
+live-loading dev app was kept as `~/Applications/Simplify (dev).app`.
+Both have bundle ID `local.simplify`.
+
+electron-builder can't run on the work Mac (no `node_modules`, npm registry
+blocked), so these fixes were patched straight into the installed bundle and
+**need to be committed and packaged on the Linux side**:
+
+1. `main.js`: hide the macOS traffic lights (`setWindowButtonVisibility(false)`,
+   `titleBarStyle: "hidden"`, no 92px left inset on the filters/search bar).
+   This was already uncommitted in the Mac working tree. The zip was built
+   from the committed version, which still showed the traffic lights.
+2. `public/style.css` + `public/app.js`: with the tracks sidebar open, the play
+   bar (`#controls`) now centers in the space left of the sidebar instead of
+   the full window. `onState` toggles `body.paused`, which freezes the
+   now-playing equalizer bars (`animation-play-state: paused`) while paused.
+
+How the in-place patch was done (in case it ever needs doing again without a
+rebuild): the bundle's fuses have `OnlyLoadAppFromAsar` and
+`EmbeddedAsarIntegrityValidation` both off, so `Contents/Resources/app.asar`
+was extracted to `Contents/Resources/app/`, the changed files were copied in,
+`app.asar` was removed, the `ElectronAsarIntegrity` key was deleted from
+`Info.plist`, and the bundle was re-signed ad hoc. The VMP `.sig` covers only
+the Electron Framework binary, so it was not affected. A fresh
+`electron-builder --mac zip --arm64` from the committed tree replaces all of
+this. Just transfer it and codesign as in step 3 above.

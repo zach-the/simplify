@@ -253,6 +253,7 @@
       if (!state.paused) player.pause();
     }
     lastState = state;
+    document.body.classList.toggle("paused", !state || state.paused);
     refreshSidebar(); // keep the "now playing" sidebar in sync, whether or not anything's on
     paintNowPlayingRow($("tracks-sidebar"));
     if (modalFor) paintNowPlayingRow($("tracks-modal"));

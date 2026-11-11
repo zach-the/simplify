@@ -12,12 +12,11 @@ const URL_ROOT = `http://127.0.0.1:${PORT}`;
 const PUBLIC = path.join(__dirname, "public");
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml" };
 
-// Room for the macOS traffic lights, plus a draggable strip along the top.
+// The macOS window has no title bar and no traffic lights, so give it a
+// draggable strip along the top.
 const MAC_CSS = `
   body::before { content: ""; position: fixed; top: 0; left: 0; right: 0; height: 52px; z-index: 4; -webkit-app-region: drag; }
   #nav, .filters, #search-bar, #toast { -webkit-app-region: no-drag; }
-  .filters, #search-bar { left: 92px; }
-  #search-input { width: min(420px, calc(100vw - 490px)); }
 `;
 
 function serve() {
@@ -49,10 +48,12 @@ function createWindow() {
     title: "Simplify",
     backgroundColor: "#121212",
     autoHideMenuBar: true,
-    titleBarStyle: mac ? "hiddenInset" : "default",
+    titleBarStyle: mac ? "hidden" : "default",
   });
   // Keep the window title fixed instead of following the page title.
   win.on("page-title-updated", (e) => e.preventDefault());
+  // Close, minimise and full screen stay available from the keyboard and menus.
+  if (mac) win.setWindowButtonVisibility(false);
   if (mac) win.webContents.on("dom-ready", () => win.webContents.insertCSS(MAC_CSS));
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
