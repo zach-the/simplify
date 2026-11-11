@@ -20,6 +20,9 @@ module.exports = async function afterPack(context) {
   }
 
   const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
-  execFileSync(evs, ["-m", "castlabs_evs.vmp", "sign-pkg", appPath], { stdio: "inherit" });
+  // sign-pkg takes the .app's PARENT directory and globs *.app inside it itself
+  // (see HANDOFF.md) -- passing the .app path directly fails with a confusing
+  // "No matching executable found", not a clear usage error.
+  execFileSync(evs, ["-m", "castlabs_evs.vmp", "sign-pkg", context.appOutDir], { stdio: "inherit" });
   console.log("VMP-signed:", appPath);
 };

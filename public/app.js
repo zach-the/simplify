@@ -147,10 +147,10 @@
   const names = (list) => (list || []).map((a) => a.name).join(", ");
 
   const toItem = {
-    album: (a) => ({ type: "album", uri: a.uri, title: a.name, sub: `Album • ${names(a.artists)}`, by: names(a.artists), image: thumb(a.images) }),
+    album: (a) => ({ type: "album", uri: a.uri, title: a.name, sub: `Album • ${names(a.artists)}`, by: names(a.artists), image: thumb(a.images), cover: bestImage(a.images) }),
     playlist: (p) => ({ type: "playlist", uri: p.uri, title: p.name, sub: `Playlist • ${p.owner?.display_name || ""}`, by: p.owner?.display_name || "", image: thumb(p.images), cover: bestImage(p.images) }),
-    show: (s) => ({ type: "show", uri: s.uri, title: s.name, sub: `Podcast • ${s.publisher || ""}`, by: s.publisher || "", image: thumb(s.images) }),
-    track: (t) => ({ type: "track", uri: t.uri, title: t.name, sub: `Song • ${names(t.artists)}`, by: names(t.artists), image: thumb(t.album?.images) }),
+    show: (s) => ({ type: "show", uri: s.uri, title: s.name, sub: `Podcast • ${s.publisher || ""}`, by: s.publisher || "", image: thumb(s.images), cover: bestImage(s.images) }),
+    track: (t) => ({ type: "track", uri: t.uri, title: t.name, sub: `Song • ${names(t.artists)}`, by: names(t.artists), image: thumb(t.album?.images), cover: bestImage(t.album?.images) }),
   };
 
   // ---------- player ----------
@@ -253,6 +253,9 @@
       if (!state.paused) player.pause();
     }
     lastState = state;
+    refreshSidebar(); // keep the "now playing" sidebar in sync, whether or not anything's on
+    paintNowPlayingRow($("tracks-sidebar"));
+    if (modalFor) paintNowPlayingRow($("tracks-modal"));
     const track = state?.track_window?.current_track;
     // These are SVG elements, which have no .hidden property; use the attribute.
     $("icon-play").toggleAttribute("hidden", !!state && !state.paused);
@@ -554,7 +557,7 @@
     return btn;
   }
 
-  // ---------- track listing (double-click an album/playlist) ----------
+  // ---------- track listing: a centered popup, and a persistent "now playing" sidebar ----------
 
   async function loadTracks(item) {
     const id = item.uri.split(":").pop();
@@ -569,59 +572,118 @@
       .map((t) => ({ uri: t.uri, title: t.name, by: names(t.artists) || t.show?.name || "", duration: t.duration_ms }));
   }
 
-  let tracksFor = null; // URI of the album/playlist the open track menu is about
-
-  function closeTracksMenu() {
-    tracksFor = null;
-    $("tracks-menu").hidden = true;
+  function buildTrackRow(t, i, item, afterPlay) {
+    const row = el(
+      "div",
+      { className: "row" },
+      el("span", { className: "num-wrap" },
+        el("span", { className: "num", textContent: String(i + 1) }),
+        el("span", { className: "play-ico", innerHTML: ICON_PLAY }),
+        el("span", { className: "now-playing-ico" }, el("span"), el("span"), el("span")),
+      ),
+      el("div", { className: "info" },
+        el("div", { className: "t-title", textContent: t.title }),
+        el("div", { className: "t-by", textContent: t.by }),
+      ),
+      makeLikeButton(t.uri),
+      makePlusButton(t.uri, t.title),
+      el("span", { className: "dur", textContent: clock(t.duration) }),
+    );
+    row.dataset.uri = t.uri;
+    row.addEventListener("click", () => { play(item, false, t.uri); afterPlay?.(); });
+    return row;
   }
 
-  async function openTracksMenu(item) {
-    tracksFor = item.uri;
-    $("tracks-art").toggleAttribute("hidden", !item.image);
-    if (item.image) $("tracks-art").src = item.image;
-    $("tracks-title").textContent = item.title;
-    $("tracks-sub").textContent = item.sub;
-    $("tracks-list").replaceChildren(el("div", { className: "empty", textContent: "Loading…" }));
-    $("tracks-menu").hidden = false;
+  // Highlights whichever row matches the currently playing track, in whatever
+  // tracks-panel (sidebar and/or modal) happens to be showing it right now.
+  function paintNowPlayingRow(root) {
+    const uris = trackUris();
+    root.querySelectorAll(".tracks-list .row").forEach((row) => {
+      row.classList.toggle("now-playing", uris.includes(row.dataset.uri));
+    });
+  }
+
+  // Fills a tracks-panel (the modal's or the sidebar's) with `item`'s tracks.
+  // `stillValid` guards against a slow fetch clobbering a newer request.
+  async function fillTracksPanel(root, item, stillValid = () => true, afterPlay) {
+    const art = root.querySelector(".tracks-art");
+    const artUrl = item.cover || item.image; // shown large here, so prefer the full-size image over the grid thumb
+    art.toggleAttribute("hidden", !artUrl);
+    if (artUrl) art.src = artUrl;
+    root.querySelector(".tracks-title").textContent = item.title;
+    root.querySelector(".tracks-sub").textContent = item.sub;
+    const list = root.querySelector(".tracks-list");
+    list.replaceChildren(el("div", { className: "empty", textContent: "Loading…" }));
 
     try {
       const tracks = await loadTracks(item);
-      if (tracksFor !== item.uri) return;
+      if (!stillValid()) return;
       if (!tracks.length) {
-        $("tracks-list").replaceChildren(el("div", { className: "empty", textContent: "No tracks found." }));
+        list.replaceChildren(el("div", { className: "empty", textContent: "No tracks found." }));
         return;
       }
-      $("tracks-list").replaceChildren(...tracks.map((t, i) => {
-        const row = el(
-          "div",
-          { className: "row" },
-          el("span", { className: "num-wrap" },
-            el("span", { className: "num", textContent: String(i + 1) }),
-            el("span", { className: "play-ico", innerHTML: ICON_PLAY }),
-          ),
-          el("div", { className: "info" },
-            el("div", { className: "t-title", textContent: t.title }),
-            el("div", { className: "t-by", textContent: t.by }),
-          ),
-          makeLikeButton(t.uri),
-          makePlusButton(t.uri, t.title),
-          el("span", { className: "dur", textContent: clock(t.duration) }),
-        );
-        row.addEventListener("click", () => { play(item, false, t.uri); closeTracksMenu(); });
-        return row;
-      }));
-      paintLiked($("tracks-list"), tracks.map((t) => t.uri));
+      list.replaceChildren(...tracks.map((t, i) => buildTrackRow(t, i, item, afterPlay)));
+      paintLiked(list, tracks.map((t) => t.uri));
+      paintNowPlayingRow(root);
     } catch (e) {
-      if (tracksFor !== item.uri) return;
-      $("tracks-list").replaceChildren(el("div", { className: "empty", textContent: e.message }));
+      if (!stillValid()) return;
+      list.replaceChildren(el("div", { className: "empty", textContent: e.message }));
     }
   }
 
-  $("tracks-close").addEventListener("click", closeTracksMenu);
-  $("tracks-menu").addEventListener("click", (e) => {
-    if (e.target === e.currentTarget) closeTracksMenu();
+  // ---- centered popup ----
+
+  let modalFor = null; // URI of the album/playlist the popup is showing
+
+  function closeModal() {
+    modalFor = null;
+    $("tracks-modal").hidden = true;
+  }
+
+  function openModal(item) {
+    modalFor = item.uri;
+    $("tracks-modal").hidden = false;
+    fillTracksPanel($("tracks-modal"), item, () => modalFor === item.uri, closeModal);
+  }
+
+  $("tracks-modal").querySelector(".tracks-close").addEventListener("click", closeModal);
+  $("tracks-modal").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) closeModal();
   });
+
+  // ---- persistent "now playing" sidebar ----
+
+  let sidebarFor = null; // URI the sidebar is currently showing (just to dedupe refreshes)
+
+  const sidebarIsOpen = () => $("tracks-sidebar").classList.contains("open");
+
+  function setSidebarOpen(open) {
+    document.body.classList.toggle("sidebar-open", open);
+    $("tracks-sidebar").classList.toggle("open", open);
+    $("sidebar-toggle").classList.toggle("on", open);
+    if (open) refreshSidebar();
+  }
+
+  async function refreshSidebar() {
+    if (!sidebarIsOpen()) return;
+    const item = await currentCoverItem();
+    if (!sidebarIsOpen()) return; // closed while this was in flight
+    if (!item) {
+      sidebarFor = null;
+      const root = $("tracks-sidebar");
+      root.querySelector(".tracks-art").toggleAttribute("hidden", true);
+      root.querySelector(".tracks-title").textContent = "";
+      root.querySelector(".tracks-sub").textContent = "";
+      root.querySelector(".tracks-list").replaceChildren(el("div", { className: "empty", textContent: "Nothing playing." }));
+      return;
+    }
+    if (sidebarFor === item.uri) return; // already showing this
+    sidebarFor = item.uri;
+    fillTracksPanel($("tracks-sidebar"), item, () => sidebarIsOpen() && sidebarFor === item.uri);
+  }
+
+  $("sidebar-toggle").addEventListener("click", () => setSidebarOpen(!sidebarIsOpen()));
+  $("tracks-sidebar").querySelector(".tracks-close").addEventListener("click", () => setSidebarOpen(false));
 
   // ---------- progress ----------
 
@@ -707,11 +769,44 @@
     }
   }
 
-  $("art").addEventListener("click", () => {
+  // Right-click flips between the album and playlist cover (left-click does nothing here).
+  $("art").addEventListener("contextmenu", (e) => {
+    e.preventDefault();
     if (!playlistContext()) return;
     coverMode = coverMode === "playlist" ? "album" : "playlist";
     store.set("coverMode", coverMode);
     updateArt();
+    refreshSidebar(); // the sidebar always tracks whichever cover is showing
+  });
+
+  function albumItem(track) {
+    const album = track.album;
+    return { type: "album", uri: album.uri, title: album.name, sub: `Album • ${names(album.artists)}`, image: bestImage(album.images) };
+  }
+
+  const playlistItems = {};
+  async function playlistItem(uri) {
+    const known = library.find((i) => i.uri === uri);
+    if (known) return known;
+    if (playlistItems[uri]) return playlistItems[uri];
+    const p = await api(`/playlists/${uri.split(":").pop()}?fields=name,owner.display_name,images`).catch(() => null);
+    return p ? (playlistItems[uri] = toItem.playlist({ ...p, uri })) : null;
+  }
+
+  // Whichever cover is currently showing: the album, or, while flipped to the
+  // playlist cover, that playlist. Used by both the sidebar and the popup.
+  async function currentCoverItem() {
+    const track = lastState?.track_window?.current_track;
+    if (!track) return null;
+    const playlist = playlistContext();
+    if (coverMode === "playlist" && playlist) return playlistItem(playlist);
+    return albumItem(track);
+  }
+
+  // Double-click always opens the centered popup, independent of the sidebar.
+  $("art").addEventListener("dblclick", async () => {
+    const item = await currentCoverItem();
+    if (item) openModal(item);
   });
 
   // Some artwork hosts don't allow cross-origin reads; show it anyway, untinted.
@@ -791,7 +886,7 @@
       tile.addEventListener("click", () => toggleTip(tile));
       tile.addEventListener("mouseleave", hideTip);
       if (item.type === "album" || item.type === "playlist") {
-        tile.addEventListener("dblclick", () => openTracksMenu(item));
+        tile.addEventListener("dblclick", () => openModal(item));
       }
       // Tiles in the outer columns grow inward so the enlarged cover isn't cut off.
       tile.addEventListener("mouseenter", () => {
@@ -814,8 +909,15 @@
     }
     for (const item of items) {
       const row = el("div", { className: "row" });
-      row.append(
+
+      const thumbPlay = el("button", { className: "thumb-play", title: "Play", innerHTML: ICON_PLAY });
+      thumbPlay.addEventListener("click", (e) => { e.stopPropagation(); play(item, false); });
+      const thumb = el("div", { className: "thumb" },
         item.image ? el("img", { src: item.image, loading: "lazy", alt: "" }) : el("span", { className: "placeholder" }),
+        thumbPlay,
+      );
+      row.append(
+        thumb,
         el("div", { className: "info" },
           el("div", { className: "title", textContent: item.title, title: item.title }),
           el("div", { className: "sub", textContent: item.sub, title: item.sub }),
@@ -837,7 +939,7 @@
       row.append(actions);
 
       if (item.type === "album" || item.type === "playlist") {
-        row.addEventListener("dblclick", () => openTracksMenu(item));
+        row.addEventListener("dblclick", () => openModal(item));
       }
       grid.append(row);
     }
@@ -1019,7 +1121,8 @@
   document.addEventListener("keydown", (e) => {
     if ($("nav").hidden || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Escape" && menuFor) return closeMenu();
-    if (e.key === "Escape" && tracksFor) return closeTracksMenu();
+    if (e.key === "Escape" && modalFor) return closeModal();
+    if (e.key === "Escape" && sidebarIsOpen()) return setSidebarOpen(false);
     if (e.target === scopeToggle) return;
     if (e.target === $("search-input")) {
       if (e.key === "Escape") show("library");

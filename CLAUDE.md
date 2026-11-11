@@ -106,8 +106,12 @@ then stop. The fix is castlabs EVS:
     vendor/evs/bin/python -m castlabs_evs.account signup   # the owner does this; it creates an account in their name
     ./build-mac.sh
 
-`build-mac.sh` already does sign-then-codesign in the right order; the signing
-half has never run. It is expected to fix playback but that is unconfirmed.
+`build-mac.sh` already does sign-then-codesign in the right order. The signing
+half turns out not to need macOS at all (`castlabs_evs.vmp` is pure Python) and
+has now run successfully from a Linux machine, worked around the PyPI block
+below — see `HANDOFF.md` for the full story, the `sign-pkg` gotcha it took a
+pass to find, and exactly what's left (Apple's own `codesign`, which does need
+a Mac, then actually trying playback — still unconfirmed).
 
 This is blocked on the owner's work Mac: a corporate security gateway
 (GlobalProtect) returns 403 for PyPI and the npm registry on every network.
