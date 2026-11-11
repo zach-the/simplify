@@ -210,7 +210,7 @@
     return deviceId;
   }
 
-  async function play(item, shuffle = false) {
+  async function play(item, shuffle = false, startUri = null) {
     try {
       restoring = false; // an explicit play beats the paused restore
       player?.activateElement();
@@ -219,7 +219,9 @@
         api(`/me/player/shuffle?state=${shuffle}&device_id=${id}`, { method: "PUT" }).then(() => true, () => false);
       // Set the mode before starting so a shuffled play opens on a random track.
       const preset = await setShuffle();
-      const body = item.type === "track" ? { uris: [item.uri] } : { context_uri: item.uri };
+      const body = item.type === "track"
+        ? { uris: [item.uri] }
+        : { context_uri: item.uri, ...(startUri ? { offset: { uri: startUri } } : {}) };
       await api(`/me/player/play?device_id=${id}`, { method: "PUT", body });
       if (!preset) {
         // Spotify rejects the mode change until this device is active (first play of a session).
@@ -423,11 +425,22 @@
     $("playlist-menu").hidden = true;
   }
 
-  function openMenu() {
-    const uris = trackUris();
-    if (!uris.length) return toast("Play something first.");
+  // Positions a popover next to `rect`, flipping above/below depending on room
+  // below `clearance` (a possibly taller rect to clear, e.g. the whole play bar).
+  function positionMenu(menu, rect, clearance = rect) {
+    const below = clearance.bottom + 8;
+    if (below + menu.offsetHeight <= innerHeight - 8) {
+      menu.style.top = `${below}px`;
+      menu.style.bottom = "auto";
+    } else {
+      menu.style.bottom = `${innerHeight - clearance.top + 8}px`;
+      menu.style.top = "auto";
+    }
+    menu.style.left = `${Math.max(8, Math.min(rect.right - menu.offsetWidth, innerWidth - menu.offsetWidth - 8))}px`;
+  }
+
+  function openMenu(uris, name, anchorEl, clearanceEl = anchorEl) {
     const menu = $("playlist-menu");
-    const name = lastState.track_window.current_track.name;
     menu.replaceChildren(el("div", { className: "heading", textContent: `Add “${name}” to…` }));
     if (!myPlaylists.length) {
       menu.append(el("div", { className: "empty", textContent: "You have no playlists you can edit." }));
@@ -467,10 +480,7 @@
 
     menuFor = uris[uris.length - 1];
     menu.hidden = false;
-    const bar = $("controls").getBoundingClientRect();
-    const btn = $("add").getBoundingClientRect();
-    menu.style.bottom = `${innerHeight - bar.top + 8}px`;
-    menu.style.left = `${Math.max(8, Math.min(btn.right - menu.offsetWidth, innerWidth - menu.offsetWidth - 8))}px`;
+    positionMenu(menu, anchorEl.getBoundingClientRect(), clearanceEl.getBoundingClientRect());
 
     const forUri = menuFor;
     eachLimited(myPlaylists, 4, async (p) => {
@@ -480,10 +490,137 @@
     });
   }
 
-  $("add").addEventListener("click", () => ($("playlist-menu").hidden ? openMenu() : closeMenu()));
+  function openNowPlayingMenu() {
+    const uris = trackUris();
+    if (!uris.length) return toast("Play something first.");
+    if (!$("playlist-menu").hidden && uris.includes(menuFor)) return closeMenu();
+    openMenu(uris, lastState.track_window.current_track.name, $("add"), $("controls"));
+  }
+
+  $("add").addEventListener("click", openNowPlayingMenu);
   document.addEventListener("click", (e) => {
     if (!menuFor || e.target.closest("#playlist-menu, #add")) return;
     closeMenu();
+  });
+
+  // ---------- per-row like / add-to-playlist buttons (search results, track listing) ----------
+
+  async function checkSaved(uris) {
+    const saved = new Set();
+    for (let i = 0; i < uris.length; i += 50) {
+      const chunk = uris.slice(i, i + 50);
+      const res = await api(`/me/library/contains?uris=${chunk.map(encodeURIComponent).join(",")}`).catch(() => null);
+      if (!res) continue;
+      chunk.forEach((u, idx) => { if (res[idx]) saved.add(u); });
+    }
+    return saved;
+  }
+
+  // After rendering rows with data-uri'd .like buttons, batch-check and paint them.
+  async function paintLiked(container, uris) {
+    if (!uris.length) return;
+    const saved = await checkSaved(uris);
+    container.querySelectorAll(".like").forEach((btn) => {
+      if (saved.has(btn.dataset.uri)) btn.classList.add("on");
+    });
+  }
+
+  function makeLikeButton(uri) {
+    const btn = el("button", { className: "like", title: "Like", innerHTML: ICON_HEART });
+    btn.dataset.uri = uri;
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const next = !btn.classList.contains("on");
+      btn.classList.add("busy");
+      try {
+        await api(`/me/library?uris=${encodeURIComponent(uri)}`, { method: next ? "PUT" : "DELETE" });
+        btn.classList.toggle("on", next);
+        btn.title = next ? "Liked. Click to remove" : "Like";
+      } catch (err) {
+        toast(err.message);
+      }
+      btn.classList.remove("busy");
+    });
+    return btn;
+  }
+
+  function makePlusButton(uri, name) {
+    const btn = el("button", { className: "plus", title: "Add to a playlist", innerHTML: ICON_PLUS });
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!$("playlist-menu").hidden && menuFor === uri) return closeMenu();
+      openMenu([uri], name, btn);
+    });
+    return btn;
+  }
+
+  // ---------- track listing (double-click an album/playlist) ----------
+
+  async function loadTracks(item) {
+    const id = item.uri.split(":").pop();
+    if (item.type === "album") {
+      const raws = await fetchAll(`/albums/${id}/tracks`);
+      return raws.filter(Boolean).map((t) => ({ uri: t.uri, title: t.name, by: names(t.artists), duration: t.duration_ms }));
+    }
+    const entries = await fetchAll(`/playlists/${id}/items`);
+    return entries
+      .map((e) => e?.item || e?.track)
+      .filter(Boolean)
+      .map((t) => ({ uri: t.uri, title: t.name, by: names(t.artists) || t.show?.name || "", duration: t.duration_ms }));
+  }
+
+  let tracksFor = null; // URI of the album/playlist the open track menu is about
+
+  function closeTracksMenu() {
+    tracksFor = null;
+    $("tracks-menu").hidden = true;
+  }
+
+  async function openTracksMenu(item) {
+    tracksFor = item.uri;
+    $("tracks-art").toggleAttribute("hidden", !item.image);
+    if (item.image) $("tracks-art").src = item.image;
+    $("tracks-title").textContent = item.title;
+    $("tracks-sub").textContent = item.sub;
+    $("tracks-list").replaceChildren(el("div", { className: "empty", textContent: "Loading…" }));
+    $("tracks-menu").hidden = false;
+
+    try {
+      const tracks = await loadTracks(item);
+      if (tracksFor !== item.uri) return;
+      if (!tracks.length) {
+        $("tracks-list").replaceChildren(el("div", { className: "empty", textContent: "No tracks found." }));
+        return;
+      }
+      $("tracks-list").replaceChildren(...tracks.map((t, i) => {
+        const row = el(
+          "div",
+          { className: "row" },
+          el("span", { className: "num-wrap" },
+            el("span", { className: "num", textContent: String(i + 1) }),
+            el("span", { className: "play-ico", innerHTML: ICON_PLAY }),
+          ),
+          el("div", { className: "info" },
+            el("div", { className: "t-title", textContent: t.title }),
+            el("div", { className: "t-by", textContent: t.by }),
+          ),
+          makeLikeButton(t.uri),
+          makePlusButton(t.uri, t.title),
+          el("span", { className: "dur", textContent: clock(t.duration) }),
+        );
+        row.addEventListener("click", () => { play(item, false, t.uri); closeTracksMenu(); });
+        return row;
+      }));
+      paintLiked($("tracks-list"), tracks.map((t) => t.uri));
+    } catch (e) {
+      if (tracksFor !== item.uri) return;
+      $("tracks-list").replaceChildren(el("div", { className: "empty", textContent: e.message }));
+    }
+  }
+
+  $("tracks-close").addEventListener("click", closeTracksMenu);
+  $("tracks-menu").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) closeTracksMenu();
   });
 
   // ---------- progress ----------
@@ -620,6 +757,10 @@
   const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>';
   const ICON_SHUFFLE =
     '<svg viewBox="0 0 24 24"><path d="M3 7h3.5c5 0 6 10 11 10H21M3 17h3.5c1.6 0 2.8-1 3.9-2.4M21 7h-3.500c-1.6 0-2.8 1-3.9 2.400M18.5 4.500L21 7l-2.5 2.500M18.5 14.500L21 17l-2.5 2.5"/></svg>';
+  const ICON_HEART =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>';
+  const ICON_PLUS =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
 
   function renderGrid(grid, items, emptyText) {
     grid.replaceChildren();
@@ -649,6 +790,9 @@
       // Clicking the cover only shows its label; playing takes the buttons.
       tile.addEventListener("click", () => toggleTip(tile));
       tile.addEventListener("mouseleave", hideTip);
+      if (item.type === "album" || item.type === "playlist") {
+        tile.addEventListener("dblclick", () => openTracksMenu(item));
+      }
       // Tiles in the outer columns grow inward so the enlarged cover isn't cut off.
       tile.addEventListener("mouseenter", () => {
         const r = tile.getBoundingClientRect();
@@ -658,6 +802,46 @@
       });
       grid.append(tile);
     }
+  }
+
+  // "All of Spotify" search results: a plain list instead of cover art, since
+  // the title/artist are shown as text and don't need a click-to-reveal tip.
+  function renderList(grid, items, emptyText) {
+    grid.replaceChildren();
+    if (!items.length) {
+      grid.append(el("div", { className: "empty", textContent: emptyText }));
+      return;
+    }
+    for (const item of items) {
+      const row = el("div", { className: "row" });
+      row.append(
+        item.image ? el("img", { src: item.image, loading: "lazy", alt: "" }) : el("span", { className: "placeholder" }),
+        el("div", { className: "info" },
+          el("div", { className: "title", textContent: item.title, title: item.title }),
+          el("div", { className: "sub", textContent: item.sub, title: item.sub }),
+        ),
+      );
+
+      const actions = el("div", { className: "actions" });
+      actions.append(makeLikeButton(item.uri));
+      if (item.type === "track") {
+        actions.append(makePlusButton(item.uri, item.title));
+      } else {
+        const shuffleBtn = el("button", { className: "shuffle", title: "Shuffle", innerHTML: ICON_SHUFFLE });
+        shuffleBtn.addEventListener("click", (e) => { e.stopPropagation(); play(item, true); });
+        actions.append(shuffleBtn);
+      }
+      const playBtn = el("button", { className: "play", title: "Play", innerHTML: ICON_PLAY });
+      playBtn.addEventListener("click", (e) => { e.stopPropagation(); play(item, false); });
+      actions.append(playBtn);
+      row.append(actions);
+
+      if (item.type === "album" || item.type === "playlist") {
+        row.addEventListener("dblclick", () => openTracksMenu(item));
+      }
+      grid.append(row);
+    }
+    paintLiked(grid, items.map((i) => i.uri));
   }
 
   // Label for a tile, shown when its cover is clicked. Shared by both grids.
@@ -781,6 +965,7 @@
     const libraryOnly = scopeToggle.checked;
     $("scope-label").textContent = libraryOnly ? "My library" : "All of Spotify";
     $("search-input").placeholder = libraryOnly ? "Search your library" : "Search Spotify";
+    $("search-grid").classList.toggle("list", !libraryOnly);
     const q = $("search-input").value.trim();
     if (!q) { $("search-grid").replaceChildren(); return; }
     if (libraryOnly) searchLibrary(q);
@@ -811,7 +996,7 @@
       const res = await api(`/search?${params}`);
       if (seq !== searchSeq) return;
       const pick = (key, kind) => (res[key]?.items || []).filter(Boolean).map(toItem[kind]);
-      renderGrid(
+      renderList(
         $("search-grid"),
         [...pick("albums", "album"), ...pick("tracks", "track"), ...pick("playlists", "playlist")],
         "No results.",
@@ -834,6 +1019,7 @@
   document.addEventListener("keydown", (e) => {
     if ($("nav").hidden || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Escape" && menuFor) return closeMenu();
+    if (e.key === "Escape" && tracksFor) return closeTracksMenu();
     if (e.target === scopeToggle) return;
     if (e.target === $("search-input")) {
       if (e.key === "Escape") show("library");

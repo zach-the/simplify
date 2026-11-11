@@ -5,6 +5,10 @@ grid, a cover-art "now playing" view, search, and a play bar. No feeds, no
 recommendations. Built for one user (the repo owner) with their own Spotify
 Premium account and their own Spotify developer app.
 
+An Apple Music variant lives alongside it in `public-am/` — same UI shell, a
+MusicKit JS backend instead of Spotify's. It's much newer and far less
+exercised; see "Apple Music variant" below before trusting anything about it.
+
 ## Layout
 
 - `public/` is the whole app: plain HTML/CSS/JS, no build step, no dependencies.
@@ -14,8 +18,6 @@ Premium account and their own Spotify developer app.
 - `main.js` is the Electron shell (the intended final form). It serves `public/`
   on `http://127.0.0.1:8974` and opens a frameless window. macOS-only tweaks
   (traffic-light inset, drag strip) are injected as CSS from here, not in `public/`.
-- `run.sh` + `server.py` are the fallback shell: a Python static server plus a
-  Google Chrome `--app` window on its own profile. Works on macOS and Linux.
 - `build-mac.sh` builds `~/Applications/Simplify.app` from the Electron runtime
   in `vendor/` and VMP-signs it if the signing tool is installed. This is the
   dev-loop app: it re-requires `main.js` from this repo, so Cmd+R shows edits
@@ -28,6 +30,8 @@ Premium account and their own Spotify developer app.
 - `vendor/` is gitignored: the Electron runtime zip(s) (also used by
   electron-builder, see below), the extracted runtime, and a Python venv for
   the signing tool.
+- `public-am/`, `run-am.sh`, `server-am.py`, and `tools/apple-dev-token.js` are
+  the separate Apple Music variant — see "Apple Music variant" below.
 
 The port and path are fixed because the Spotify app's registered redirect URI is
 exactly `http://127.0.0.1:8974/callback`. Changing the port means changing it in
@@ -35,14 +39,19 @@ the Spotify dashboard too.
 
 ## Running it
 
-- Chrome shell (plays music today): `./run.sh`. It keeps running until every
-  Chrome process on its profile has quit. Edit files in `public/`, then Cmd+R.
-- Electron shell: open `~/Applications/Simplify.app` (built by `./build-mac.sh`).
-  It loads code from this folder, so edits also show up on Cmd+R.
+Electron is the only shell now; the Chrome fallback (`run.sh`/`server.py`) has
+been removed.
 
-Each shell has its own browser profile, so each needs its own Spotify sign-in.
-The Electron sign-in lives in `~/Library/Application Support/Simplify` and
-survives rebuilds.
+- macOS: open `~/Applications/Simplify.app` (built by `./build-mac.sh`). It
+  loads code from this folder, so edits show up on Cmd+R — no rebuild needed.
+  Sign-in lives in `~/Library/Application Support/Simplify` and survives rebuilds.
+- Linux: no live dev-loop script yet — `npm run dist:linux` bundles `public/`
+  into the AppImage's asar archive, so seeing an edit means rebuilding and
+  relaunching (`./dist/Simplify-<version>.AppImage`) each time. Sign-in lives in
+  `~/.config/Simplify` and survives rebuilds. A `build-mac.sh`-style script that
+  symlinks `node_modules/electron` to `vendor/electron` and runs `electron .`
+  directly against `public/` would fix this if it becomes annoying enough to
+  justify writing.
 
 ## Packaging a distributable build
 
@@ -72,7 +81,7 @@ release asset, not an npm-resolvable git dependency in some environments.
 
 ## Current state
 
-Everything below works in the Chrome shell unless marked untested. "Untested"
+Everything below works in the Electron app unless marked untested. "Untested"
 means written and syntax-checked but never exercised against the live account.
 
 - Library grid with filter chips and sort (recently added / last played / artist / title); both persist.
@@ -128,7 +137,98 @@ and give `node_modules/electron` a minimal `package.json` (version
 real `electron` npm package does, just pointed at the castlabs build already
 in `vendor/`.
 
-Once Electron plays, delete `run.sh` and `server.py`; the owner wants Electron only.
+`run.sh`/`server.py` have already been deleted — the owner wants Electron
+only, and the Linux build is now in day-to-day use. This section's fix is
+still open specifically for macOS.
+
+## Apple Music variant
+
+`public-am/` is a second, independent copy of the UI (same `index.html`/
+`style.css` shape, accent colour swapped to Apple's pink-red) backed by
+MusicKit JS instead of the Spotify Web API + Web Playback SDK. Run it with
+`./run-am.sh` (port 8975, its own Chrome profile under `simplify-am/`, no
+`/callback` route needed — see below). It is much newer than the Spotify side
+and has only been exercised against MusicKit JS itself, never against a real
+Apple ID or Apple Music subscription.
+
+### One-time setup (the owner's job, not something this session can do)
+
+MusicKit needs a signed developer token (a JWT), and producing one needs a
+private key that must never reach client-side code — the opposite of
+Spotify's PKCE client ID, which is why this can't just be a `config.js` value
+like the Spotify one:
+
+1. Enroll in the Apple Developer Program (developer.apple.com, $99/yr) if not
+   already enrolled.
+2. Certificates, Identifiers & Profiles → Keys → create a key with MusicKit
+   enabled. Download the `.p8` file — Apple only allows this once.
+3. Note the Team ID (Membership page) and the key's Key ID.
+4. `node tools/apple-dev-token.js --team <TEAM_ID> --key <KEY_ID> --p8 <path>`
+   from the repo root. It signs the JWT locally (Node's built-in `crypto`,
+   ES256, no dependency) and writes `public-am/config.js`, which is gitignored.
+   Re-run it before the token expires — Apple caps that at 6 months, and there
+   is no auto-refresh.
+
+### Architecture differences from the Spotify side worth knowing
+
+- No PKCE, no `/callback`, no refresh tokens: MusicKit JS owns both the
+  developer token and the user's Music User Token once `authorize()` is
+  called, and persists them itself. `server-am.py` is a plain static server
+  with no special-cased routes.
+- No device model: shuffle/repeat/seek are local properties on
+  `music.player`, not REST calls against a "device id" the way Spotify's are.
+- MusicKit JS is assumed to persist its own queue/now-playing state across
+  reloads, so there's no equivalent of the Spotify version's `restoreSession`
+  dance. Unverified.
+
+### Feature gaps vs. the Spotify version (API limitations, not oversights)
+
+- No podcasts: Apple Music's API has no public library-podcast endpoint, so
+  there's no "Podcasts" filter chip here.
+- "Last played" sort only reflects plays made inside this app — Apple's
+  recently-played endpoints don't expose timestamps, so (unlike the Spotify
+  version) there's no history to backfill from on first run.
+- Add-to-playlist can only add, never remove: Apple's library-playlist API has
+  no delete-track endpoint. Rows already in a playlist show the checkmark but
+  are inert instead of toggling off like the Spotify version's menu.
+- The cover-view playlist/album toggle is tracked locally from the last
+  explicit tile `play()` call, not from a MusicKit-provided "now playing
+  context" field (none was found that's reliably populated) — it won't follow
+  mid-playlist autoplay/radio the way the Spotify version's server-tracked
+  context does.
+
+### What's actually been verified, and what hasn't
+
+Checked in a real (if display-less) Chrome, with real network access to
+Apple's MusicKit CDN:
+- MusicKit JS v3 loads and `MusicKit.configure()` succeeds.
+- A malformed/expired developer token is rejected locally with a clean,
+  catchable error (surfaced on the setup screen) — confirmed with a
+  deliberately expired token.
+- A correctly-dated but not-Apple-signed token passes local validation and
+  reaches the "Sign in with Apple Music" screen with no console errors.
+- Found and fixed a real bug this way: `music.player` is `undefined` for a
+  window right after `configure()`, before any sign-in — the 500ms progress
+  poll crashed on it. Fixed with optional chaining everywhere `music.player`
+  is read outside a context gated by the signed-in UI being visible.
+
+Never exercised, because they need a real Apple ID with an Apple Music
+subscription and a real signed token: `authorize()`'s actual sign-in flow,
+playback itself, library loading, ratings ("love"), catalog search, and
+add-to-playlist. The exact shapes relied on for these —
+`music.api.music()`'s error format, the Ratings API path and whether
+`playParams.id` is really the catalog id it's assumed to be, catalog search's
+`results.{albums,songs,playlists}.data` shape, `music.storefrontId`,
+`MediaItem.artworkURL()` — all come from MusicKit JS/Apple Music API
+documentation, not from having run them.
+
+The biggest open question, parallel to the Spotify side's Widevine problem:
+whether MusicKit JS playback works in Chrome/Chromium at all the way it does
+in Safari. Apple's own web player is understood to work in Chrome too (via
+Widevine, like Spotify), which would make the existing castlabs Electron
+build potentially reusable for this variant — but that's untested, and no
+Electron wiring (`main-am.js`) has been written for Apple Music yet; `run-am.sh`
+is Chrome-only, same starting point the Spotify side had before Electron.
 
 ## Planned
 
@@ -149,8 +249,6 @@ Once Electron plays, delete `run.sh` and `server.py`; the owner wants Electron o
 - SVG elements have no `.hidden` property; use `toggleAttribute("hidden", …)`.
 - A script-only `.app` bundle is launched under Rosetta on Apple Silicon and the
   system `python3` then fails. Force `arch -arm64` if you ever make one again.
-- Launching Chrome with a profile that is already running hands the window to
-  the existing process and returns immediately; `run.sh` waits on the profile, not the command.
 - Two Chromes running (the owner's and Simplify's) confuse AppleScript
   `tell application "Google Chrome"`; the owner's Hammerspoon Hyper+N shortcut
   opens windows in Simplify's blank profile. Their real profile is untouched.
